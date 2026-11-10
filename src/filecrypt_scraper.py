@@ -279,39 +279,28 @@ def wait_for_manual_challenge(page: Page, headful: bool, timeout_seconds: int) -
     # wait until shadow_host disappears
     # shadow_host = page.locator(cutcaptcha_shadow_host_selector)
     # print("shadow_host", shadow_host)
-    print("waiting for shadow_host to disappear", end="", flush=True)
-    # FIXME timeout, dont hang forever
-    while True:
-        count = shadow_host.count()
-        if count == 0:
-            print(" done")
-            # TODO dynamic: return as soon as the page content has been loaded
-            dt = 2
-            print(f"waiting for the page content: dt={dt}")
-            time.sleep(dt)
-            return True
-        # print(f" {count}", end="", flush=True)
-        print(f".", end="", flush=True)
-        time.sleep(1)
-
-    print(
-        "\n"
-        "A site challenge is visible in Firefox.\n"
-        "Complete it yourself in the browser window. Do not use automated "
-        "challenge-solving.\n"
-        "When the actual Filecrypt container page has loaded, return here "
-        "and press Enter.\n",
-        file=sys.stderr,
-    )
-    input("Press Enter to continue (Ctrl+C to stop): ")
-
     deadline = time.monotonic() + timeout_seconds
+    LOG.info(f"Waiting up to {timeout_seconds} seconds for challenge to finish")
     while time.monotonic() < deadline:
-        if not page.is_closed() and not page_looks_challenged(page):
-            return True
-        time.sleep(1)
-
-    LOG.error("Challenge page is still present after the manual wait.")
+        if page.is_closed():
+            raise RuntimeError("Browser page closed during challenge")
+        try:
+            if shadow_host.count() == 0:
+                LOG.info("Challenge element disappeared")
+                # Allow the container page to finish rendering.
+                try:
+                    page.wait_for_load_state("domcontentloaded", timeout=5_000)
+                except BrowserTimeoutError:
+                    pass
+                # Verify that the challenge really ended.
+                if not page_looks_challenged(page):
+                    return True
+        except BrowserError as exc:
+            LOG.debug("Error inspecting challenge: %s", exc)
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(1.0, remaining))
+    LOG.error(f"Challenge did not complete within {timeout_seconds} seconds: {page.url}")
     return False
 
 
