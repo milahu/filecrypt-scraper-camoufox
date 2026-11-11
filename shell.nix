@@ -9,4 +9,5 @@ mkShell {
       cryptography
     ]))
   ];
+  FIREFOX_ADDON_DARKREADER = nur.repos.milahu.python3.pkgs.camoufox.firefox-addons.darkreader;
 }
