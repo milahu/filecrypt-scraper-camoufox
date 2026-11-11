@@ -21,6 +21,8 @@ Notes:
 
 from __future__ import annotations
 
+import os
+import sys
 import argparse
 import base64
 import binascii
@@ -456,6 +458,13 @@ def main() -> int:
 
 def decrypt_packages(packages, args):
 
+    camoufox_addons = [
+        os.environ.get("FIREFOX_ADDON_DARKREADER"),
+    ]
+    camoufox_addons = list(filter(bool, camoufox_addons))
+    for addon in camoufox_addons:
+        print(f"adding camoufox addon: {addon}")
+
     camoufox_kwargs = dict(
         # headless=True,
         # headless=False, # debug: run the browser in headful mode
@@ -477,6 +486,8 @@ def decrypt_packages(packages, args):
             # Read closed shadow roots
             "forceScopeAccess": True,
         },
+
+        addons=camoufox_addons,
     )
 
     with (
