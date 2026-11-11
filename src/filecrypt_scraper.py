@@ -323,7 +323,7 @@ def goto(page: Page, url: str, headful: bool, challenge_timeout: int) -> bool:
 
 
 def extract_package(
-        context: BrowserContext,
+        page: Page,
         package: dict[str, Any],
         headful: bool,
         challenge_timeout: int,
@@ -332,11 +332,11 @@ def extract_package(
     if not CONTAINER_RE.match(url):
         raise ValueError(f"Not a recognized Filecrypt container URL: {url!r}")
 
-    page = context.new_page()
+    # page = context.new_page()
     urls: list[str] = []
     dlc_urls: list[str] = []
 
-    try:
+    if 1: # keep indent
         if not goto(page, url, headful, challenge_timeout):
             raise RuntimeError("Filecrypt page did not become accessible")
 
@@ -377,8 +377,8 @@ def extract_package(
         # Weblinks: use a separate tab for each short link and follow its Go URL.
         # Manual challenge is supported when headful.
         for link_id in unique(re.findall(WEBLINK_RE, html)):
-            link_page = context.new_page()
-            try:
+            link_page = page
+            if 1: # keep indent
                 link_url = urljoin(url, f"/Link/{link_id}.html")
                 if not goto(link_page, link_url, headful, challenge_timeout):
                     continue
@@ -400,16 +400,12 @@ def extract_package(
                             LOG.debug("Following Go URL failed: %s", exc)
                         break
                     time.sleep(1 + attempt)
-            finally:
-                link_page.close()
 
         # DLC: this is a downloadable container, not a list of hoster URLs.
         for dlc_id in unique(DLC_RE.findall(html)):
             dlc_urls.append(urljoin(url, f"/DLC/{dlc_id}.dlc"))
 
         return unique(urls), unique(dlc_urls)
-    finally:
-        page.close()
 
 
 def main() -> int:
@@ -417,10 +413,6 @@ def main() -> int:
     parser.add_argument("input_json", type=Path, help="JSON file containing package objects")
     parser.add_argument("output_json", type=Path, help="Where to write enriched package JSON")
     parser.add_argument("--headful", action="store_true", help="Show Firefox and allow manual challenge completion")
-    parser.add_argument("--profile-dir", type=Path, default=Path("./filecrypt-firefox-profile"),
-                        help="Persistent Firefox profile directory")
-    parser.add_argument("--firefox-executable", type=Path,
-                        help="Optional path to a Playwright-compatible Firefox executable")
     parser.add_argument("--challenge-timeout", type=int, default=180,
                         help="Seconds to wait after you press Enter (default: 180)")
     parser.add_argument("--log-level", default="INFO",
@@ -439,8 +431,30 @@ def main() -> int:
     if not isinstance(packages, list):
         parser.error("Input JSON must contain a top-level list")
 
-    args.profile_dir.mkdir(parents=True, exist_ok=True)
     results: list[dict[str, Any]] = []
+
+    for package_num, decrypted_package in enumerate(decrypt_packages(packages, args), start=1):
+        results.append(decrypted_package)
+
+        # Save incrementally so a later interruption does not lose work.
+        LOG.info(f"Writing {args.output_json}")
+        args.output_json.parent.mkdir(parents=True, exist_ok=True)
+        args.output_json.write_text(
+            json.dumps(results + packages[package_num:], ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    r'''
+    # Final output contains all packages, including any skipped/untouched tail.
+    args.output_json.write_text(
+        json.dumps(results, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    LOG.info(f"Done {args.output_json}")
+    '''
+
+
+def decrypt_packages(packages, args):
 
     camoufox_kwargs = dict(
         # headless=True,
@@ -465,7 +479,10 @@ def main() -> int:
         },
     )
 
-    with Camoufox(**camoufox_kwargs) as context:
+    with (
+            Camoufox(**camoufox_kwargs) as context,
+            context.new_page() as page,
+        ):
         # page = context.new_page()
         # page.goto("https://example.com")
         # time.sleep(10) # debug: keep the browser open
@@ -476,25 +493,29 @@ def main() -> int:
         # so we waste some time here
         dt = 10
         print(f"waiting for uBlock Origin to init filter lists: dt={dt}")
-        with context.new_page() as page:
+        if 1: # keep indent
             page.goto("https://ipfighter.com/bot-detection")
             # page.goto("https://antcpt.com/score_detector/")
             time.sleep(dt)
 
-        try:
+        # try:
+        if 1: # keep indent
             for package_num, original in enumerate(packages, start=1):
                 if not isinstance(original, dict):
-                    LOG.warning("Item %d is not an object; preserving it unchanged", package_num)
-                    results.append(original)
+                    LOG.warning(f"Item {package_num} is not an object; preserving it unchanged")
+                    # results.append(original)
+                    yield original
                     continue
 
                 item = dict(original)
                 label = item.get("name") or item.get("filecrypt_url") or f"package {package_num}"
-                LOG.info(f"[{package_num}/{len(packages)}] Processing package {label}")
+                # no, packages can be an iterator, so len(packages) can be undefined
+                # LOG.info(f"[{package_num}/{len(packages)}] Processing package {label}")
+                LOG.info(f"Processing package {package_num}: {label}")
 
                 try:
                     decrypted, dlc_urls = extract_package(
-                        context, item, args.headful, args.challenge_timeout
+                        page, item, args.headful, args.challenge_timeout
                     )
                     item["decrypted_urls"] = decrypted
                     if dlc_urls:
@@ -504,7 +525,9 @@ def main() -> int:
                     total_num_urls = len(decrypted) + len(dlc_urls)
                     if total_num_urls == 0:
                         print(f"error: found no URLs")
-                        return 1
+                        # return 1
+                        yield original
+                        continue
                 except KeyboardInterrupt:
                     raise
                 except Exception as exc:
@@ -512,25 +535,14 @@ def main() -> int:
                     item["decryption_error"] = f"{type(exc).__name__}: {exc}"
                     LOG.exception("Failed to process %s", label)
 
-                results.append(item)
+                yield item
 
-                # Save incrementally so a later interruption does not lose work.
-                args.output_json.parent.mkdir(parents=True, exist_ok=True)
-                args.output_json.write_text(
-                    json.dumps(results + packages[package_num:], ensure_ascii=False, indent=2) + "\n",
-                    encoding="utf-8",
-                )
-
+        r'''
         finally:
+            # TODO is this needed with the context block?
+            page.close()
             context.close()
-
-    # Final output contains all packages, including any skipped/untouched tail.
-    args.output_json.write_text(
-        json.dumps(results, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    LOG.info(f"Done {args.output_json}")
-    return 0
+        '''
 
 
 if __name__ == "__main__":
